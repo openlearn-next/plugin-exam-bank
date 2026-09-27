@@ -300,6 +300,8 @@ function SurveyDesigner({ notice }: { notice: (m: string, ok?: boolean) => void 
   const [title, setTitle] = useState('');
   const [mode, setMode] = useState<'quiz' | 'survey'>('quiz');
   const [identity, setIdentity] = useState<'realname' | 'anonymous'>('realname');
+  const [examMode, setExamMode] = useState(false);
+  const [timeLimitMin, setTimeLimitMin] = useState(0);
   const [picked, setPicked] = useState<string[]>([]);
 
   const reload = useCallback(async () => {
@@ -315,7 +317,8 @@ function SurveyDesigner({ notice }: { notice: (m: string, ok?: boolean) => void 
     if (!title.trim()) return notice('请填写标题', false);
     if (!picked.length) return notice('请至少选择一道题目', false);
     const r = await invoke<any>('exambank.survey.save', {
-      title: title.trim(), mode, identity_mode: identity, question_ids: picked, config: {},
+      title: title.trim(), mode, identity_mode: identity, question_ids: picked,
+      config: mode === 'quiz' && examMode ? { examMode: true, timeLimitSec: timeLimitMin > 0 ? timeLimitMin * 60 : 0 } : {},
     });
     if (r?.success) { notice('已保存为草稿'); setTitle(''); setPicked([]); reload(); }
     else notice(r?.error || '保存失败', false);
@@ -360,6 +363,21 @@ function SurveyDesigner({ notice }: { notice: (m: string, ok?: boolean) => void 
             </label>
           ))}
         </div>
+        {mode === 'quiz' && (
+          <div style={{ ...card, display: 'flex', alignItems: 'center', gap: 14, padding: '10px 14px' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 13 }}>
+              <input type="checkbox" checked={examMode} onChange={(e) => setExamMode(e.target.checked)} />
+              🔒 考试模式（全屏锁定）
+            </label>
+            {examMode && (
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+                限时（分钟，0 不限）：
+                <input type="number" min={0} value={timeLimitMin} onChange={(e) => setTimeLimitMin(Number(e.target.value) || 0)}
+                  style={{ ...input, width: 70 }} />
+              </label>
+            )}
+          </div>
+        )}
         <button style={{ ...btnPrimary, alignSelf: 'flex-start' }} onClick={saveSurvey}>保存草稿</button>
       </div>
       <div style={{ overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -649,6 +667,26 @@ function StudentAnswerView(props: { lessonId?: string; studentId?: string }) {
 
   const submitRef = useRef(false);
 
+  // 考试倒计时：publishedAt + timeLimitSec → 剩余秒数
+  // 场景区分：考试进行中加入（到期自动交卷） vs 考试结束后加入（显示已结束，不交空卷）
+  const mountAtRef = useRef(Date.now());
+  const endsAt = active?.config?.timeLimitSec > 0 && active?.publishedAt ? active.publishedAt + active.config.timeLimitSec * 1000 : null;
+  const examLiveAtMount = endsAt === null ? null : endsAt > mountAtRef.current;
+  const [nowTick, setNowTick] = useState(Date.now());
+  useEffect(() => {
+    if (!endsAt) return;
+    const t = setInterval(() => setNowTick(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [endsAt]);
+  const remainingSec = endsAt ? Math.max(0, Math.round((endsAt - nowTick) / 1000)) : null;
+  useEffect(() => {
+    if (examLiveAtMount && endsAt && remainingSec === 0 && active && !submitRef.current) {
+      console.info('[exam-bank] 考试时间到，自动交卷');
+      submit();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [remainingSec]);
+
   // 晚进/刷新恢复：挂载时主动查询本课节进行中的卷（脱敏，无标准答案）
   useEffect(() => {
     const lessonId = props.lessonId || ctx?.context?.get?.()?.lessonId;
@@ -668,6 +706,8 @@ function StudentAnswerView(props: { lessonId?: string; studentId?: string }) {
             title: act.survey.title,
             mode: act.survey.mode,
             identity_mode: act.survey.identity_mode,
+            config: act.survey.config,
+            publishedAt: act.survey.published_at,
             questions: act.questions,
           });
         }
@@ -687,7 +727,7 @@ function StudentAnswerView(props: { lessonId?: string; studentId?: string }) {
         setSubmitted(false); setResult(null); setAnswersMap({});
         if (history.includes(data.surveyId) && data.mode === 'quiz') return;
         setSubmittedFlag(!!history.includes(data.surveyId));
-        setActive(data);
+        setActive({ ...data, publishedAt: Date.now() });
       } else if (data.action === 'closed') {
         if (active?.surveyId === data.surveyId) setActive(null);
       }
@@ -697,6 +737,7 @@ function StudentAnswerView(props: { lessonId?: string; studentId?: string }) {
       if (!lessonId) return;
       invoke('exambank.survey.active_for_lesson', { lessonId })
         .then((r: any) => {
+          console.info('[exam-bank] restore response:', JSON.stringify(r).slice(0, 240));
           const act = r?.active;
           if (act?.classId) socket.emit('join-room', `class-${act.classId}`);
           if (act?.survey && !submitRef.current) {
@@ -705,6 +746,8 @@ function StudentAnswerView(props: { lessonId?: string; studentId?: string }) {
               title: act.survey.title,
               mode: act.survey.mode,
               identity_mode: act.survey.identity_mode,
+              config: act.survey.config,
+              publishedAt: act.survey.published_at,
               questions: act.questions,
             });
           }
@@ -770,6 +813,84 @@ function StudentAnswerView(props: { lessonId?: string; studentId?: string }) {
   if (!active) return null;
 
   const setAnswer = (qid: string, v: any) => setAnswersMap((prev) => ({ ...prev, [qid]: v }));
+
+  // ── 考试模式（config.examMode）：全屏锁定接管视图 ──
+  if (active.config?.examMode && examLiveAtMount === false) {
+    // 考试已结束才加入：显示结束态，不交空卷
+    return (
+      <div style={{ position: 'fixed', inset: 0, zIndex: 100, background: '#0f172a', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div style={{ textAlign: 'center', color: '#e2e8f0' }}>
+          <div style={{ fontSize: 42, marginBottom: 12 }}>⏱</div>
+          <h2 style={{ fontSize: 18, margin: '0 0 8px' }}>{active.title}</h2>
+          <p style={{ fontSize: 13, color: '#94a3b8', margin: 0 }}>考试时间已结束，无法再进入作答。</p>
+        </div>
+      </div>
+    );
+  }
+  if (active.config?.examMode) {
+    return (
+      <div style={{ position: 'fixed', inset: 0, zIndex: 100, background: '#0f172a', overflow: 'auto', color: '#e2e8f0' }}>
+        <div style={{ position: 'sticky', top: 0, background: '#0f172a', borderBottom: '1px solid #334155', padding: '14px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', zIndex: 5 }}>
+          <div>
+            <h2 style={{ fontSize: 17, margin: 0, color: '#fff' }}>🔒 {active.title}</h2>
+            <p style={{ fontSize: 11, color: '#94a3b8', margin: '3px 0 0' }}>
+              考试模式 · {active.mode === 'quiz' ? '实名作答' : active.identity_mode === 'anonymous' ? '匿名作答' : '作答中'} · 交卷前不可退出
+            </p>
+          </div>
+          {active.config?.timeLimitSec > 0 && remainingSec !== null && (
+            <div style={{ textAlign: 'right' }}>
+              <div style={{ fontSize: 22, fontWeight: 700, fontVariantNumeric: 'tabular-nums', color: remainingSec > 60 ? '#4ade80' : remainingSec > 10 ? '#facc15' : '#f87171' }}>
+                {String(Math.floor(remainingSec / 60)).padStart(2, '0')}:{String(remainingSec % 60).padStart(2, '0')}
+              </div>
+              <div style={{ fontSize: 10, color: '#94a3b8' }}>剩余时间</div>
+            </div>
+          )}
+        </div>
+        <div style={{ maxWidth: 760, margin: '24px auto', padding: '0 20px 40px' }}>
+          {active.questions.map((q: any, idx: number) => (
+            <div key={q.id} style={{ background: '#1e293b', border: '1px solid #334155', borderRadius: 12, padding: 16, marginBottom: 14 }}>
+              <p style={{ margin: '0 0 10px', fontSize: 14, color: '#e2e8f0' }}>
+                <strong>{idx + 1}.</strong> {q.stem}
+                {q.score != null && q.score > 0 ? <span style={{ fontSize: 11, color: '#64748b' }}>（{q.score} 分）</span> : null}
+              </p>
+              {(q.type === 'single' || q.type === 'boolean') &&
+                (q.options ?? []).map((opt: any) => (
+                  <label key={opt.key} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '6px 0', cursor: 'pointer', color: '#cbd5e1' }}>
+                    <input type="radio" name={`q-${q.id}`} checked={answersMap[q.id] === opt.key} onChange={() => setAnswer(q.id, opt.key)} />
+                    <span style={{ fontSize: 13 }}>{opt.text}</span>
+                  </label>
+                ))}
+              {q.type === 'multi' &&
+                (q.options ?? []).map((opt: any) => (
+                  <label key={opt.key} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '6px 0', cursor: 'pointer', color: '#cbd5e1' }}>
+                    <input
+                      type="checkbox"
+                      checked={(answersMap[q.id] ?? []).includes(opt.key)}
+                      onChange={() => {
+                        const cur: string[] = answersMap[q.id] ?? [];
+                        setAnswer(q.id, cur.includes(opt.key) ? cur.filter((x) => x !== opt.key) : [...cur, opt.key]);
+                      }}
+                    />
+                    <span style={{ fontSize: 13 }}>{opt.text}</span>
+                  </label>
+                ))}
+              {q.type === 'fill' && (
+                <input placeholder="在此填写答案…" value={answersMap[q.id] ?? ''} onChange={(e) => setAnswer(q.id, e.target.value)}
+                  style={{ ...input, background: '#0f172a', borderColor: '#334155', color: '#e2e8f0' }} />
+              )}
+              {q.type === 'open' && (
+                <textarea placeholder="在此作答…" value={answersMap[q.id] ?? ''} onChange={(e) => setAnswer(q.id, e.target.value)}
+                  style={{ ...input, minHeight: 90, background: '#0f172a', borderColor: '#334155', color: '#e2e8f0' }} />
+              )}
+            </div>
+          ))}
+          <button style={{ ...btnPrimary, padding: '10px 32px' }} onClick={submit} disabled={submitted}>
+            {submitted ? '已交卷' : '交卷'}
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   // 课中弹出形态：固定居中模态（学生上课中被锁定在课节视图，仪表盘槽位不可见）
   return (
