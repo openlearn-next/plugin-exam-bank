@@ -112,6 +112,14 @@ export function createCore(db: DbHandle, tables: Tables, publish: PublishFn) {
       const q = input ?? {};
       if (!q.type || !q.stem) throw new OpError('missing type or stem', 400);
       if (!QUESTION_TYPES.includes(q.type)) throw new OpError(`unknown question type: ${q.type}`, 400);
+      // 判断题兜底：与前端编辑器行为一致 —— 未传 options 时自动注入 正确/错误 两项
+      let options = q.options;
+      if (q.type === 'boolean' && (!Array.isArray(options) || options.length === 0)) {
+        options = [
+          { key: 'true', text: '正确' },
+          { key: 'false', text: '错误' },
+        ];
+      }
       const now = Date.now();
       const id = q.id || crypto.randomUUID();
       let createdAt = now;
@@ -130,7 +138,7 @@ export function createCore(db: DbHandle, tables: Tables, publish: PublishFn) {
         id,
         q.type,
         q.stem,
-        JSON.stringify(q.options ?? null),
+        JSON.stringify(options ?? null),
         JSON.stringify(q.answer ?? null),
         q.answerStrict ? 1 : 0,
         q.score ?? 1,
@@ -457,7 +465,10 @@ export function createCore(db: DbHandle, tables: Tables, publish: PublishFn) {
       if (q.type === 'single' || q.type === 'multi' || q.type === 'boolean') {
         const dist: Record<string, number> = {};
         for (const a of answers) {
-          const keys = safeJsonParse<string[]>(a.answer, []);
+          // single/boolean 的 normalized 是字符串（JSON 存储为 "true"/"A"），
+          // multi 才是数组 —— 直接 for..of 字符串会按字符拆键（历史 bug：{"t":1,"r":1,...}）
+          const parsed = safeJsonParse<string | string[]>(a.answer, []);
+          const keys = Array.isArray(parsed) ? parsed : [String(parsed)];
           for (const k of keys) dist[k] = (dist[k] || 0) + 1;
         }
         item.option_distribution = dist;
