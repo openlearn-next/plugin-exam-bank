@@ -1,0 +1,127 @@
+{
+  "id": "@teacher/plugin-exam-bank",
+  "name": "题库与随堂测验",
+  "version": "0.1.0",
+  "main": "index.js",
+  "description": "多题型题库、问卷/组卷设计、实时作答推送与统计图表（构建产物以 dist/ 为入口）",
+  "author": "OpenLearn",
+  "engines": {
+    "openlearn": ">=0.3.16"
+  },
+  "requires": [
+    "@openlearn/core:ICommandBusService@^1.0.0",
+    "@openlearn/core:IEventBusService@^1.0.0",
+    "@openlearn/core:IStorageService@^1.0.0",
+    "@openlearn/core:IDatabase@^1.0.0"
+  ],
+  "capabilitiesProposed": [
+    "lesson:read",
+    "user:read"
+  ],
+  "api": {
+    "baseRoute": "/api/plugins/exam-bank",
+    "routes": [
+      {
+        "method": "GET",
+        "path": "/questions",
+        "auth": true,
+        "roles": [
+          "teacher",
+          "administrator"
+        ]
+      },
+      {
+        "method": "POST",
+        "path": "/questions",
+        "auth": true,
+        "roles": [
+          "teacher",
+          "administrator"
+        ]
+      },
+      {
+        "method": "DELETE",
+        "path": "/questions/:id",
+        "auth": true,
+        "roles": [
+          "teacher",
+          "administrator"
+        ]
+      },
+      {
+        "method": "POST",
+        "path": "/questions/import",
+        "auth": true,
+        "roles": [
+          "teacher",
+          "administrator"
+        ]
+      },
+      {
+        "method": "GET",
+        "path": "/surveys",
+        "auth": true,
+        "roles": [
+          "teacher",
+          "administrator"
+        ]
+      },
+      {
+        "method": "POST",
+        "path": "/surveys",
+        "auth": true,
+        "roles": [
+          "teacher",
+          "administrator"
+        ]
+      },
+      {
+        "method": "POST",
+        "path": "/surveys/:id/publish",
+        "auth": true,
+        "roles": [
+          "teacher",
+          "administrator"
+        ]
+      },
+      {
+        "method": "POST",
+        "path": "/surveys/:id/close",
+        "auth": true,
+        "roles": [
+          "teacher",
+          "administrator"
+        ]
+      },
+      {
+        "method": "GET",
+        "path": "/surveys/:id/stats",
+        "auth": true,
+        "roles": [
+          "teacher",
+          "administrator"
+        ]
+      },
+      {
+        "method": "GET",
+        "path": "/surveys/active/:classId",
+        "auth": true,
+        "roles": [
+          "teacher",
+          "student",
+          "administrator"
+        ]
+      },
+      {
+        "method": "POST",
+        "path": "/surveys/:id/submit",
+        "auth": true,
+        "roles": [
+          "teacher",
+          "student",
+          "administrator"
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "name": "openlearn-plugin-exam-bank",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "题库·问卷·随堂测验：多题型题库、组卷/问卷设计、实时作答与统计图表",
+  "author": "OpenLearn",
+  "dependencies": {
+    "@openlearn/plugin-sdk": "workspace:*"
+  },
+  "peerDependencies": {
+    "react": ">=17",
+    "react-dom": ">=17"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0",
+    "@types/react": "^18.0.0",
+    "@openlearn/plugin-test-kit": "workspace:*"
+  }
+}
